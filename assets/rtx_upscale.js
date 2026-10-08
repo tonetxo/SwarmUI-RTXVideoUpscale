@@ -1,54 +1,60 @@
-// Add RTX Upscale button to video context menus via SwarmUI's registerMediaButton API.
+// Register RTX Video action buttons in SwarmUI history context menus
 (function() {
     if (typeof registerMediaButton !== 'function') {
-        console.warn('RTX Upscale: registerMediaButton is not available - SwarmUI version may be too old');
+        console.warn('RTX Video: registerMediaButton is not available - SwarmUI version may be too old');
         return;
     }
 
     let videoExtensions = ['mp4', 'webm', 'gif', 'mov', 'avi', 'mkv'];
 
+    function isVideoSrc(src) {
+        let isDataImage = src.startsWith('data:');
+        let isDataVideo = isDataImage && src.toLowerCase().startsWith('data:video/');
+        if (isDataVideo) {
+            return false; // Data URLs are not supported
+        }
+        if (typeof getMediaType === 'function' && getMediaType(src) === 'video') {
+            return true;
+        }
+        let extension = src.split('.').pop().toLowerCase().split('?')[0];
+        return videoExtensions.includes(extension);
+    }
+
+    // 1. RTX Upscale button
     registerMediaButton(
         'RTX Upscale',
         (src) => {
             if (typeof currentBackendFeatureSet === 'undefined' || !currentBackendFeatureSet.includes('rtx_video_upscale')) {
-                let message = 'RTX Upscale is not available on the current backend. Please install or enable the NVIDIA RTX Nodes node pack first.';
-                console.warn('RTX Upscale: ' + message);
+                let message = 'RTX Video Upscale is not available on the current backend. Please install or enable NVIDIA RTX Nodes.';
+                console.warn('RTX Video: ' + message);
                 if (typeof showToast === 'function') {
                     showToast(message);
                 }
                 return;
             }
 
-            let isDataImage = src.startsWith('data:');
-            let isDataVideo = isDataImage && src.toLowerCase().startsWith('data:video/');
-            let isVideo = isDataVideo;
-            if (!isDataImage) {
-                let extension = src.split('.').pop().toLowerCase().split('?')[0];
-                isVideo = videoExtensions.includes(extension);
-            }
-
-            // Data URL videos are not supported.
-            if (isDataVideo) {
-                return;
-            }
-
-            // Only videos are supported.
-            if (!isVideo) {
+            if (!isVideoSrc(src)) {
                 return;
             }
 
             let input_overrides = { 'images': 1 };
-
             let fullsrc = typeof getImageFullSrc === 'function' ? getImageFullSrc(src) : src;
             let prefix = typeof getImageOutPrefix === 'function' ? getImageOutPrefix() : 'Output';
             input_overrides['rtxvideofile'] = prefix + '/' + fullsrc;
 
-            // Read RTX params from UI.
-            let rtxParams = ['rtxupscalequality', 'rtxupscalescale'];
-            for (let paramId of rtxParams) {
+            let upscaleParams = [
+                'rtxupscalequality',
+                'rtxupscaleresizemode',
+                'rtxupscalescale',
+                'rtxupscaletargetwidth',
+                'rtxupscaletargetheight',
+                'rtxupscalestrength',
+                'rtxupscaleencoding'
+            ];
+
+            for (let paramId of upscaleParams) {
                 let elem = document.getElementById('input_' + paramId);
                 if (elem) {
-                    // Skip toggleable params whose toggle is off (same logic as simpletab.js).
                     let toggleElem = document.getElementById('input_' + paramId + '_toggle');
                     if (toggleElem && !toggleElem.checked) {
                         continue;
@@ -65,8 +71,67 @@
             }
         },
         'Upscale this video using NVIDIA RTX Video Super Resolution',
-        ['video'],  // mediaTypes: 'video' (SwarmUI expects media category, not file extensions)
-        true,       // isDefault: true promotes button to be visible directly on the toolbar
-        true        // showInHistory
+        ['video'],
+        true,
+        true
+    );
+
+    // 2. RTX Interpolate button
+    registerMediaButton(
+        'RTX Interpolate',
+        (src) => {
+            if (typeof currentBackendFeatureSet === 'undefined' || (!currentBackendFeatureSet.includes('rtx_video_frame_gen') && !currentBackendFeatureSet.includes('rtx_video_upscale'))) {
+                let message = 'RTX Video Frame Generation is not available on the current backend. Please install or enable NVIDIA RTX Nodes.';
+                console.warn('RTX Video: ' + message);
+                if (typeof showToast === 'function') {
+                    showToast(message);
+                }
+                return;
+            }
+
+            if (!isVideoSrc(src)) {
+                return;
+            }
+
+            let input_overrides = { 'images': 1 };
+            let fullsrc = typeof getImageFullSrc === 'function' ? getImageFullSrc(src) : src;
+            let prefix = typeof getImageOutPrefix === 'function' ? getImageOutPrefix() : 'Output';
+            input_overrides['rtxinterpolatevideofile'] = prefix + '/' + fullsrc;
+
+            let interpParams = [
+                'rtxframeinterpolation',
+                'rtxframegenadjustfps',
+                'rtxframegenmode',
+                'rtxframegenshotdetection',
+                'rtxframegenencoding'
+            ];
+
+            for (let paramId of interpParams) {
+                let elem = document.getElementById('input_' + paramId);
+                if (elem) {
+                    let toggleElem = document.getElementById('input_' + paramId + '_toggle');
+                    if (toggleElem && !toggleElem.checked) {
+                        continue;
+                    }
+                    let val = typeof getInputVal === 'function' ? getInputVal(elem, true) : elem.value;
+                    if (val != null && val !== '') {
+                        input_overrides[paramId] = val;
+                    }
+                }
+            }
+
+            // Ensure multiplier is at least 2 when clicking the interpolation button directly
+            if (!input_overrides['rtxframeinterpolation'] || parseInt(input_overrides['rtxframeinterpolation']) < 2) {
+                input_overrides['rtxframeinterpolation'] = 2;
+            }
+
+            if (typeof mainGenHandler !== 'undefined' && mainGenHandler.doGenerate) {
+                mainGenHandler.doGenerate(input_overrides, {});
+            }
+        },
+        'Interpolate frames of this video using NVIDIA RTX Video Frame Generation',
+        ['video'],
+        true,
+        true
     );
 })();

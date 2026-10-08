@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using FreneticUtilities.FreneticExtensions;
 using SwarmUI.Accounts;
 using SwarmUI.Core;
@@ -14,50 +15,98 @@ namespace RTXVideoUpscale;
 
 public class RTXVideoUpscaleExtension : Extension
 {
-    public static T2IParamGroup RTXUpscaleGroup;
+    public static T2IParamGroup RTXGroup;
 
-    public static T2IRegisteredParam<string> RTXVideoFile;
+    // Upscale parameters
     public static T2IRegisteredParam<string> RTXUpscaleQuality;
+    public static T2IRegisteredParam<string> RTXUpscaleResizeMode;
     public static T2IRegisteredParam<double> RTXUpscaleScale;
+    public static T2IRegisteredParam<int> RTXUpscaleTargetWidth;
+    public static T2IRegisteredParam<int> RTXUpscaleTargetHeight;
+    public static T2IRegisteredParam<double> RTXUpscaleStrength;
+    public static T2IRegisteredParam<string> RTXUpscaleEncoding;
+
+    // Frame Interpolation parameters
+    public static T2IRegisteredParam<int> RTXFrameInterpolation;
+    public static T2IRegisteredParam<bool> RTXFrameGenAdjustFps;
+    public static T2IRegisteredParam<string> RTXFrameGenMode;
+    public static T2IRegisteredParam<bool> RTXFrameGenShotDetection;
+    public static T2IRegisteredParam<string> RTXFrameGenEncoding;
+
+    // Internal history video parameters
+    public static T2IRegisteredParam<string> RTXVideoFile;
+    public static T2IRegisteredParam<string> RTXInterpolateVideoFile;
+
+    public static readonly string[] QualityOptions =
+    [
+        "HIGHBITRATE_ULTRA",
+        "HIGHBITRATE_HIGH",
+        "HIGHBITRATE_MEDIUM",
+        "HIGHBITRATE_LOW",
+        "ULTRA",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "BICUBIC",
+        "DENOISE_ULTRA",
+        "DENOISE_HIGH",
+        "DENOISE_MEDIUM",
+        "DENOISE_LOW",
+        "DEBLUR_ULTRA",
+        "DEBLUR_HIGH",
+        "DEBLUR_MEDIUM",
+        "DEBLUR_LOW",
+        "STREAMING_ULTRA",
+        "STREAMING_MEDIUM"
+    ];
 
     public override void OnInit()
     {
-        Logs.Init("RTX Video Upscale Extension initializing...");
+        Logs.Init("RTX Video Upscale & Frame Generation Extension initializing...");
 
-        // Register feature mapping so SwarmUI detects the RTX node pack and exposes the feature flag.
+        // Register feature mapping for NVIDIA RTX ComfyUI nodes
         ComfyUIBackendExtension.NodeToFeatureMap["RTXVideoSuperResolution"] = "rtx_video_upscale";
+        ComfyUIBackendExtension.NodeToFeatureMap["RTXVideoFrameGeneration"] = "rtx_video_frame_gen";
+        ComfyUIBackendExtension.NodeToFeatureMap["RTXTrueHDR"] = "rtx_true_hdr";
 
-        // Register installable feature so the node pack can be installed from the UI if missing.
+        // Register installable feature for missing node pack
         InstallableFeatures.RegisterInstallableFeature(new(
             "NVIDIA RTX Nodes",
             "rtx_video_upscale",
             "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI",
             "comfyui",
-            "This will install the NVIDIA RTX Nodes ComfyUI node pack (RTX Video Super Resolution).\nDo you wish to install?"
+            "This will install the NVIDIA RTX Nodes ComfyUI node pack (RTX Video Super Resolution / Frame Generation).\nDo you wish to install?"
+        ));
+        InstallableFeatures.RegisterInstallableFeature(new(
+            "NVIDIA RTX Nodes",
+            "rtx_video_frame_gen",
+            "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI",
+            "comfyui",
+            "This will install the NVIDIA RTX Nodes ComfyUI node pack (RTX Video Frame Generation).\nDo you wish to install?"
         ));
 
-        // Add the JS file that registers the history button.
+        // Add the JS file that registers history action buttons
         ScriptFiles.Add("assets/rtx_upscale.js");
 
         RegisterParameters();
 
-        // Priority -1: Video file upscaling from history (creates entire workflow if video file is set)
+        // Priority -1: Standalone video upscale or frame interpolation from history
         WorkflowGenerator.AddStep(GenerateRTXVideoFileWorkflow, -1);
         // Priority 6: Image generation upscaling (after VAEDecode at 1, before SaveImage at 10)
         WorkflowGenerator.AddStep(GenerateRTXImageWorkflow, 6);
-        // Priority 90: Video generation upscaling (after video decode/trim/interpolation at 50, before True Final Save at 100)
+        // Priority 80: Video generation frame interpolation (after decode, before upscale at 90 and True Final Save at 100)
+        WorkflowGenerator.AddStep(GenerateRTXFrameGenWorkflow, 80);
+        // Priority 90: Video generation upscaling (after interpolation, before True Final Save at 100)
         WorkflowGenerator.AddStep(GenerateRTXVideoGenerationWorkflow, 90);
 
-        Logs.Init("RTX Video Upscale Extension loaded successfully.");
+        Logs.Init("RTX Video Upscale & Frame Generation Extension loaded successfully.");
     }
 
     private static void RegisterParameters()
     {
-        RTXUpscaleGroup = new(
+        RTXGroup = new(
             Name: "RTX Video Upscale",
-            Description: "Upscale video or image output using NVIDIA RTX Video Super Resolution.\n" +
-                         "Enable this group during generation, or select an existing video in output history and click 'RTX Upscale'.\n" +
-                         "Requires the NVIDIA RTX Nodes ComfyUI node pack.",
+            Description: "",
             Toggles: true,
             Open: false,
             OrderPriority: 8,
@@ -66,78 +115,186 @@ public class RTXVideoUpscaleExtension : Extension
 
         double priority = 0;
 
+        // --- Upscale Parameters ---
+
         RTXUpscaleQuality = T2IParamTypes.Register<string>(new T2IParamType(
             Name: "RTX Upscale Quality",
-            Description: "Quality level for RTX Video Super Resolution.\n" +
-                         "LOW, MEDIUM, HIGH, or ULTRA (default).\n" +
-                         "Higher quality is slower but produces better results.",
-            Default: "ULTRA",
-            Group: RTXUpscaleGroup,
+            Description: "",
+            Default: "HIGHBITRATE_ULTRA",
+            Group: RTXGroup,
             OrderPriority: priority++,
             FeatureFlag: "rtx_video_upscale",
             DoNotPreview: true,
-            GetValues: _ => ["LOW", "MEDIUM", "HIGH", "ULTRA"]
+            GetValues: _ => QualityOptions.ToList()
+        ));
+
+        RTXUpscaleResizeMode = T2IParamTypes.Register<string>(new T2IParamType(
+            Name: "RTX Upscale Resize Mode",
+            Description: "",
+            Default: "Scale by Multiplier",
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_upscale",
+            DoNotPreview: true,
+            GetValues: _ => ["Scale by Multiplier", "Target Dimensions"]
         ));
 
         RTXUpscaleScale = T2IParamTypes.Register<double>(new T2IParamType(
             Name: "RTX Upscale Scale",
-            Description: "Scale factor for RTX Video Super Resolution (e.g. 2.0 doubles the size).",
+            Description: "",
             Default: "2.0",
             Min: 1.0,
             Max: 4.0,
             Step: 0.01,
-            Group: RTXUpscaleGroup,
+            Group: RTXGroup,
             OrderPriority: priority++,
             FeatureFlag: "rtx_video_upscale",
             DoNotPreview: true
         ));
 
-        // Hidden parameter - used internally by the RTX Upscale button in output history.
+        RTXUpscaleTargetWidth = T2IParamTypes.Register<int>(new T2IParamType(
+            Name: "RTX Upscale Target Width",
+            Description: "",
+            Default: "1920",
+            Min: 64,
+            Max: 8192,
+            Step: 8,
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_upscale",
+            DoNotPreview: true,
+            IsAdvanced: true
+        ));
+
+        RTXUpscaleTargetHeight = T2IParamTypes.Register<int>(new T2IParamType(
+            Name: "RTX Upscale Target Height",
+            Description: "",
+            Default: "1080",
+            Min: 64,
+            Max: 8192,
+            Step: 8,
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_upscale",
+            DoNotPreview: true,
+            IsAdvanced: true
+        ));
+
+        RTXUpscaleStrength = T2IParamTypes.Register<double>(new T2IParamType(
+            Name: "RTX Upscale Strength",
+            Description: "",
+            Default: "1.0",
+            Min: 0.0,
+            Max: 1.0,
+            Step: 0.01,
+            ViewType: ParamViewType.SLIDER,
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_upscale",
+            DoNotPreview: true,
+            IsAdvanced: true
+        ));
+
+        RTXUpscaleEncoding = T2IParamTypes.Register<string>(new T2IParamType(
+            Name: "RTX Upscale Encoding",
+            Description: "",
+            Default: "8-bit RGB",
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_upscale",
+            DoNotPreview: true,
+            IsAdvanced: true,
+            GetValues: _ => ["8-bit RGB", "10-bit RGB (RGB10A2)"]
+        ));
+
+        // --- Frame Generation (Interpolation) Parameters ---
+
+        RTXFrameInterpolation = T2IParamTypes.Register<int>(new T2IParamType(
+            Name: "RTX Frame Generation Multiplier",
+            Description: "",
+            Default: "1",
+            Min: 1,
+            Max: 16,
+            Step: 1,
+            ViewType: ParamViewType.SLIDER,
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_frame_gen",
+            DoNotPreview: true
+        ));
+
+        RTXFrameGenAdjustFps = T2IParamTypes.Register<bool>(new T2IParamType(
+            Name: "RTX Frame Gen Adjust FPS",
+            Description: "",
+            Default: "true",
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_frame_gen",
+            DoNotPreview: true
+        ));
+
+        RTXFrameGenMode = T2IParamTypes.Register<string>(new T2IParamType(
+            Name: "RTX Frame Gen Mode",
+            Description: "",
+            Default: "MEDIUM",
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_frame_gen",
+            DoNotPreview: true,
+            GetValues: _ => ["MEDIUM", "HIGH", "LOW"]
+        ));
+
+        RTXFrameGenShotDetection = T2IParamTypes.Register<bool>(new T2IParamType(
+            Name: "RTX Frame Gen Shot Detection",
+            Description: "",
+            Default: "true",
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_frame_gen",
+            DoNotPreview: true,
+            IsAdvanced: true
+        ));
+
+        RTXFrameGenEncoding = T2IParamTypes.Register<string>(new T2IParamType(
+            Name: "RTX Frame Gen Encoding",
+            Description: "",
+            Default: "8-bit RGB",
+            Group: RTXGroup,
+            OrderPriority: priority++,
+            FeatureFlag: "rtx_video_frame_gen",
+            DoNotPreview: true,
+            IsAdvanced: true,
+            GetValues: _ => ["8-bit RGB", "10-bit RGB (RGB10A2)"]
+        ));
+
+        // --- Hidden History Action Parameters ---
+
         RTXVideoFile = T2IParamTypes.Register<string>(new(
             "RTX Video File",
-            "Internal parameter for video file upscaling.",
+            "",
             "",
             FeatureFlag: "rtx_video_upscale",
             ChangeWeight: 2,
             VisibleNormally: false
         ));
+
+        RTXInterpolateVideoFile = T2IParamTypes.Register<string>(new(
+            "RTX Interpolate Video File",
+            "",
+            "",
+            FeatureFlag: "rtx_video_frame_gen",
+            ChangeWeight: 2,
+            VisibleNormally: false
+        ));
     }
 
-    /// <summary>Generates a complete workflow to upscale a video file with RTX Video Super Resolution.</summary>
-    /// <remarks>
-    /// Runs at priority -1 (before all generation). When <see cref="RTXVideoFile"/> is set, it creates
-    /// the entire workflow (load video -> RTX upscale -> recombine audio -> save) and skips all other steps.
-    /// </remarks>
-    public static void GenerateRTXVideoFileWorkflow(WorkflowGenerator g)
+    private static string ResolveVideoPath(User user, string videoFile)
     {
-        // Only activate if a video file path is set.
-        if (!g.UserInput.TryGet(RTXVideoFile, out string videoFile) || string.IsNullOrEmpty(videoFile))
-        {
-            return;
-        }
-
-        Logs.Info($"RTX Video Upscale: Processing video '{videoFile}'");
-
-        // Verify the RTX node pack is available.
-        if (!g.Features.Contains("rtx_video_upscale"))
-        {
-            throw new SwarmUserErrorException("RTX Video Upscale requires the NVIDIA RTX Nodes ComfyUI node pack. Please install it (ComfyUI_NVIDIA_RTX_Nodes).");
-        }
-
-        // The video is embedded as base64 (see below), so this backend feature is required.
-        if (!g.Features.Contains("comfy_loadimage_b64") || WorkflowGenerator.RestrictCustomNodes)
-        {
-            throw new SwarmUserErrorException("RTX Video Upscale requires SwarmUI's ComfyUI backend nodes (comfy_loadimage_b64) and cannot run with restricted custom nodes.");
-        }
-
-        // Expand path (support ~ for home directory).
         if (videoFile.StartsWith("~/"))
         {
             videoFile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + videoFile[1..];
         }
 
-        // Resolve Output/ or View/ paths to actual file system paths using user's output directory.
-        User user = g.UserInput.SourceSession?.User;
         if (user is not null)
         {
             string relativePath = null;
@@ -147,7 +304,6 @@ public class RTXVideoUpscaleExtension : Extension
             }
             else if (videoFile.StartsWith("View/"))
             {
-                // View/{user_id}/path format - strip View/{user_id}/ prefix.
                 string afterView = videoFile["View/".Length..];
                 int slashIndex = afterView.IndexOf('/');
                 if (slashIndex > 0)
@@ -163,57 +319,11 @@ public class RTXVideoUpscaleExtension : Extension
             }
         }
 
-        // Validate the file exists.
-        if (!File.Exists(videoFile))
-        {
-            throw new SwarmUserErrorException($"RTX Video Upscale: Video file not found: {videoFile}");
-        }
+        return videoFile;
+    }
 
-        // Read the file into memory so it can be embedded directly in the workflow (via base64),
-        // rather than handing ComfyUI a host filesystem path.
-        VideoFile sourceVideo;
-        try
-        {
-            byte[] rawVideoData = File.ReadAllBytes(videoFile);
-            sourceVideo = new VideoFile(rawVideoData, MediaType.GetByExtension(videoFile.AfterLast('.').ToLowerFast()));
-        }
-        catch (Exception ex)
-        {
-            throw new SwarmUserErrorException($"RTX Video Upscale: Could not read video: {ex.Message}");
-        }
-
-        // Get upscale parameters.
-        string quality = g.UserInput.Get(RTXUpscaleQuality, "ULTRA");
-        double scale = g.UserInput.Get(RTXUpscaleScale, 2.0);
-
-        Logs.Info($"RTX Video Upscale: quality={quality}, scale={scale}");
-
-        // 1. Load the video - embedded as base64 via SwarmUI's LoadVideo helper.
-        WGNodeData videoData = g.LoadVideo(sourceVideo, "${rtx_source_video}", false);
-        JArray loadedVideoFrames = videoData.Path;
-        JArray videoAudio = videoData.AttachedAudio?.Path;
-        JArray videoFps = (JArray)videoData.FPS;
-
-        // 2. RTX Video Super Resolution - upscale the video frames.
-        JObject rtxInputs = new JObject()
-        {
-            ["images"] = loadedVideoFrames,
-            ["resize_type"] = "scale by multiplier",
-            ["resize_type.scale"] = scale,
-            ["quality"] = quality
-        };
-        string rtxNode = g.CreateNode("RTXVideoSuperResolution", rtxInputs);
-        JArray upscaledFrames = new JArray() { rtxNode, 0 };
-
-        // 3. CreateVideo - combine upscaled frames with original audio.
-        string createVideoNode = g.CreateNode("CreateVideo", new JObject()
-        {
-            ["images"] = upscaledFrames,
-            ["audio"] = videoAudio,
-            ["fps"] = videoFps
-        });
-
-        // 4. SaveVideo - save the upscaled result.
+    private static (string container, string codec) GetVideoFormat(WorkflowGenerator g)
+    {
         string swarmVideoFormat = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4");
         string container = "mp4";
         string codec = "auto";
@@ -227,32 +337,200 @@ public class RTXVideoUpscaleExtension : Extension
         {
             container = swarmVideoFormat;
         }
-        // ComfyUI SaveVideo only supports "mp4" or "auto" containers.
+
         if (container != "mp4" && container != "auto")
         {
             container = "mp4";
         }
-        // ComfyUI SaveVideo only supports "h264" or "auto" codecs.
         if (codec != "h264" && codec != "auto")
         {
             codec = "auto";
         }
-        g.CreateNode("SaveVideo", new JObject()
-        {
-            ["video"] = new JArray() { createVideoNode, 0 },
-            ["filename_prefix"] = "video/RTX_upscaled",
-            ["format"] = container,
-            ["codec"] = codec
-        });
-
-        // Mark workflow as complete - skip all other generation steps.
-        g.CurrentMedia = new WGNodeData(upscaledFrames, g, WGNodeData.DT_IMAGE, g.CurrentCompat());
-        g.SkipFurtherSteps = true;
-
-        Logs.Info($"RTX Video Upscale: Complete workflow created - loading '{videoFile}', upscaling {scale}x ({quality}), saving as {codec}-{container}");
+        return (container, codec);
     }
 
-    /// <summary>Returns true if the current generation request is producing video output.</summary>
+    private static JObject BuildRTXSuperResolutionInputs(WorkflowGenerator g, JArray inputImages)
+    {
+        string quality = g.UserInput.Get(RTXUpscaleQuality, "HIGHBITRATE_ULTRA");
+        string resizeMode = g.UserInput.Get(RTXUpscaleResizeMode, "Scale by Multiplier");
+        double scale = g.UserInput.Get(RTXUpscaleScale, 2.0);
+        int targetWidth = g.UserInput.Get(RTXUpscaleTargetWidth, 1920);
+        int targetHeight = g.UserInput.Get(RTXUpscaleTargetHeight, 1080);
+        double strength = g.UserInput.Get(RTXUpscaleStrength, 1.0);
+        string encoding = g.UserInput.Get(RTXUpscaleEncoding, "8-bit RGB");
+
+        JObject rtxInputs = new()
+        {
+            ["images"] = inputImages,
+            ["quality"] = quality,
+            ["strength"] = strength,
+            ["image_encoding"] = encoding
+        };
+
+        if (resizeMode.Equals("Target Dimensions", StringComparison.OrdinalIgnoreCase))
+        {
+            rtxInputs["resize_type"] = "target dimensions";
+            rtxInputs["resize_type.width"] = targetWidth;
+            rtxInputs["resize_type.height"] = targetHeight;
+        }
+        else
+        {
+            rtxInputs["resize_type"] = "scale by multiplier";
+            rtxInputs["resize_type.scale"] = scale;
+        }
+
+        return rtxInputs;
+    }
+
+    private static JObject BuildRTXFrameGenerationInputs(WorkflowGenerator g, JArray inputImages, int multiplier)
+    {
+        string mode = g.UserInput.Get(RTXFrameGenMode, "MEDIUM");
+        bool shotDetection = g.UserInput.Get(RTXFrameGenShotDetection, true);
+        string encoding = g.UserInput.Get(RTXFrameGenEncoding, "8-bit RGB");
+
+        return new JObject()
+        {
+            ["images"] = inputImages,
+            ["generation_type"] = "frame rate multiplier",
+            ["generation_type.multiplier"] = multiplier,
+            ["mode"] = mode,
+            ["automatic_shot_change_detection"] = shotDetection,
+            ["shot_change"] = false,
+            ["image_encoding"] = encoding
+        };
+    }
+
+    /// <summary>Generates a complete workflow to upscale or interpolate a video file from history.</summary>
+    public static void GenerateRTXVideoFileWorkflow(WorkflowGenerator g)
+    {
+        bool hasUpscaleFile = g.UserInput.TryGet(RTXVideoFile, out string upscaleFile) && !string.IsNullOrEmpty(upscaleFile);
+        bool hasInterpFile = g.UserInput.TryGet(RTXInterpolateVideoFile, out string interpFile) && !string.IsNullOrEmpty(interpFile);
+
+        if (!hasUpscaleFile && !hasInterpFile)
+        {
+            return;
+        }
+
+        if (!g.Features.Contains("comfy_loadimage_b64") || WorkflowGenerator.RestrictCustomNodes)
+        {
+            throw new SwarmUserErrorException("NVIDIA RTX video processing requires SwarmUI's ComfyUI backend nodes (comfy_loadimage_b64) and cannot run with restricted custom nodes.");
+        }
+
+        User user = g.UserInput.SourceSession?.User;
+
+        if (hasInterpFile)
+        {
+            string resolvedPath = ResolveVideoPath(user, interpFile);
+            if (!File.Exists(resolvedPath))
+            {
+                throw new SwarmUserErrorException($"RTX Frame Generation: Video file not found: {resolvedPath}");
+            }
+
+            if (!g.Features.Contains("rtx_video_frame_gen"))
+            {
+                throw new SwarmUserErrorException("RTX Frame Generation requires the NVIDIA RTX Nodes ComfyUI node pack (RTXVideoFrameGeneration).");
+            }
+
+            int multiplier = g.UserInput.Get(RTXFrameInterpolation, 2);
+            if (multiplier < 2)
+            {
+                multiplier = 2;
+            }
+            bool adjustFps = g.UserInput.Get(RTXFrameGenAdjustFps, true);
+
+            Logs.Info($"RTX Frame Generation: Processing video file '{resolvedPath}' (multiplier={multiplier}, adjustFps={adjustFps})");
+
+            byte[] rawVideoData = File.ReadAllBytes(resolvedPath);
+            VideoFile sourceVideo = new(rawVideoData, MediaType.GetByExtension(resolvedPath.AfterLast('.').ToLowerFast()));
+
+            WGNodeData videoData = g.LoadVideo(sourceVideo, "${rtx_interp_source_video}", false);
+            JArray loadedVideoFrames = videoData.Path;
+            JArray videoAudio = videoData.AttachedAudio?.Path;
+            JToken videoFps = videoData.FPS;
+
+            string rtxNode = g.CreateNode("RTXVideoFrameGeneration", BuildRTXFrameGenerationInputs(g, loadedVideoFrames, multiplier));
+            JArray interpolatedFrames = new() { rtxNode, 0 };
+
+            JToken finalFps = videoFps;
+            if (adjustFps && multiplier > 1)
+            {
+                string multNode = g.CreateNode("CM_FloatBinaryOperation", new JObject()
+                {
+                    ["op"] = "Mul",
+                    ["a"] = videoFps,
+                    ["b"] = (double)multiplier
+                });
+                finalFps = new JArray() { multNode, 0 };
+            }
+
+            string createVideoNode = g.CreateNode("CreateVideo", new JObject()
+            {
+                ["images"] = interpolatedFrames,
+                ["audio"] = videoAudio,
+                ["fps"] = finalFps
+            });
+
+            var (container, codec) = GetVideoFormat(g);
+            g.CreateNode("SaveVideo", new JObject()
+            {
+                ["video"] = new JArray() { createVideoNode, 0 },
+                ["filename_prefix"] = "video/RTX_interpolated",
+                ["format"] = container,
+                ["codec"] = codec
+            });
+
+            g.CurrentMedia = new WGNodeData(interpolatedFrames, g, WGNodeData.DT_IMAGE, g.CurrentCompat());
+            g.SkipFurtherSteps = true;
+            return;
+        }
+
+        if (hasUpscaleFile)
+        {
+            string resolvedPath = ResolveVideoPath(user, upscaleFile);
+            if (!File.Exists(resolvedPath))
+            {
+                throw new SwarmUserErrorException($"RTX Video Upscale: Video file not found: {resolvedPath}");
+            }
+
+            if (!g.Features.Contains("rtx_video_upscale"))
+            {
+                throw new SwarmUserErrorException("RTX Video Upscale requires the NVIDIA RTX Nodes ComfyUI node pack (RTXVideoSuperResolution).");
+            }
+
+            Logs.Info($"RTX Video Upscale: Processing video file '{resolvedPath}'");
+
+            byte[] rawVideoData = File.ReadAllBytes(resolvedPath);
+            VideoFile sourceVideo = new(rawVideoData, MediaType.GetByExtension(resolvedPath.AfterLast('.').ToLowerFast()));
+
+            WGNodeData videoData = g.LoadVideo(sourceVideo, "${rtx_upscale_source_video}", false);
+            JArray loadedVideoFrames = videoData.Path;
+            JArray videoAudio = videoData.AttachedAudio?.Path;
+            JToken videoFps = videoData.FPS;
+
+            string rtxNode = g.CreateNode("RTXVideoSuperResolution", BuildRTXSuperResolutionInputs(g, loadedVideoFrames));
+            JArray upscaledFrames = new() { rtxNode, 0 };
+
+            string createVideoNode = g.CreateNode("CreateVideo", new JObject()
+            {
+                ["images"] = upscaledFrames,
+                ["audio"] = videoAudio,
+                ["fps"] = videoFps
+            });
+
+            var (container, codec) = GetVideoFormat(g);
+            g.CreateNode("SaveVideo", new JObject()
+            {
+                ["video"] = new JArray() { createVideoNode, 0 },
+                ["filename_prefix"] = "video/RTX_upscaled",
+                ["format"] = container,
+                ["codec"] = codec
+            });
+
+            g.CurrentMedia = new WGNodeData(upscaledFrames, g, WGNodeData.DT_IMAGE, g.CurrentCompat());
+            g.SkipFurtherSteps = true;
+        }
+    }
+
     private static bool IsVideoGenerationRequest(WorkflowGenerator g)
     {
         if (g.IsVideoModel())
@@ -274,108 +552,130 @@ public class RTXVideoUpscaleExtension : Extension
         return false;
     }
 
-    /// <summary>Generates RTX Video Super Resolution nodes for image generation upscaling.</summary>
-    /// <remarks>
-    /// Runs at priority 6: after VAEDecode (1) and before SaveImage (10).
-    /// </remarks>
+    /// <summary>Generates RTX Video Super Resolution nodes for image generation upscaling (Priority 6).</summary>
     public static void GenerateRTXImageWorkflow(WorkflowGenerator g)
     {
-        // Skip if video file mode is active.
-        if (g.UserInput.TryGet(RTXVideoFile, out string videoFile) && !string.IsNullOrEmpty(videoFile))
+        if (g.UserInput.TryGet(RTXVideoFile, out string vFile) && !string.IsNullOrEmpty(vFile))
         {
             return;
         }
-        // Only run for image generations.
+        if (g.UserInput.TryGet(RTXInterpolateVideoFile, out string iFile) && !string.IsNullOrEmpty(iFile))
+        {
+            return;
+        }
         if (IsVideoGenerationRequest(g))
         {
             return;
         }
-        // Only activate if the group toggle is enabled.
-        if (!g.UserInput.TryGet(RTXUpscaleQuality, out _) && !g.UserInput.TryGet(RTXUpscaleScale, out _))
+        if (!g.UserInput.TryGet(RTXUpscaleQuality, out _) && !g.UserInput.TryGet(RTXUpscaleScale, out _) && !g.UserInput.TryGet(RTXUpscaleResizeMode, out _))
         {
             return;
         }
-        // Verify RTX node pack is available.
         if (!g.Features.Contains("rtx_video_upscale"))
         {
-            throw new SwarmUserErrorException("RTX Video Upscale is enabled, but NVIDIA RTX Nodes (ComfyUI_NVIDIA_RTX_Nodes) are not installed in ComfyUI.");
+            throw new SwarmUserErrorException("RTX Video Upscale is enabled, but NVIDIA RTX Nodes (ComfyUI_NVIDIA_RTX_Nodes) are not installed or available on this backend.");
         }
         if (g.CurrentMedia is null)
         {
             return;
         }
 
-        string quality = g.UserInput.Get(RTXUpscaleQuality, "ULTRA");
-        double scale = g.UserInput.Get(RTXUpscaleScale, 2.0);
+        Logs.Info("RTX Video Upscale: Upscaling image generation output with RTX Video Super Resolution");
 
-        Logs.Info($"RTX Video Upscale: Upscaling image generation output {scale}x ({quality})");
-
-        JObject rtxInputs = new JObject()
-        {
-            ["images"] = g.CurrentMedia.Path,
-            ["resize_type"] = "scale by multiplier",
-            ["resize_type.scale"] = scale,
-            ["quality"] = quality
-        };
-        string rtxNode = g.CreateNode("RTXVideoSuperResolution", rtxInputs);
+        string rtxNode = g.CreateNode("RTXVideoSuperResolution", BuildRTXSuperResolutionInputs(g, g.CurrentMedia.Path));
         g.CurrentMedia = new WGNodeData(new JArray() { rtxNode, 0 }, g, WGNodeData.DT_IMAGE, g.CurrentCompat());
     }
 
-    /// <summary>Generates RTX Video Super Resolution nodes for video generation upscaling.</summary>
-    /// <remarks>
-    /// Runs at priority 90: after video generation, decode, and cleanups (trim/interpolation at 50),
-    /// and before True Final Save (priority 100).
-    /// </remarks>
-    public static void GenerateRTXVideoGenerationWorkflow(WorkflowGenerator g)
+    /// <summary>Generates RTX Video Frame Generation nodes during live video generation (Priority 80).</summary>
+    public static void GenerateRTXFrameGenWorkflow(WorkflowGenerator g)
     {
-        // Skip if video file mode is active.
-        if (g.UserInput.TryGet(RTXVideoFile, out string videoFile) && !string.IsNullOrEmpty(videoFile))
+        if (g.UserInput.TryGet(RTXVideoFile, out string vFile) && !string.IsNullOrEmpty(vFile))
         {
             return;
         }
-        // Only run for video generations.
+        if (g.UserInput.TryGet(RTXInterpolateVideoFile, out string iFile) && !string.IsNullOrEmpty(iFile))
+        {
+            return;
+        }
         if (!IsVideoGenerationRequest(g))
         {
             return;
         }
-        // Only activate if the group toggle is enabled.
-        if (!g.UserInput.TryGet(RTXUpscaleQuality, out _) && !g.UserInput.TryGet(RTXUpscaleScale, out _))
+
+        int multiplier = g.UserInput.Get(RTXFrameInterpolation, 1);
+        if (multiplier < 2)
         {
             return;
         }
-        // Verify RTX node pack is available.
-        if (!g.Features.Contains("rtx_video_upscale"))
+
+        if (!g.Features.Contains("rtx_video_frame_gen"))
         {
-            throw new SwarmUserErrorException("RTX Video Upscale is enabled, but NVIDIA RTX Nodes (ComfyUI_NVIDIA_RTX_Nodes) are not installed in ComfyUI.");
+            throw new SwarmUserErrorException("RTX Frame Generation is enabled, but NVIDIA RTX Nodes (RTXVideoFrameGeneration) are not available on this ComfyUI backend.");
         }
         if (g.CurrentMedia is null)
         {
             return;
         }
 
-        string quality = g.UserInput.Get(RTXUpscaleQuality, "ULTRA");
-        double scale = g.UserInput.Get(RTXUpscaleScale, 2.0);
+        Logs.Info($"RTX Frame Generation: Interpolating video frames {multiplier}x");
 
-        Logs.Info($"RTX Video Upscale: Upscaling video generation frames {scale}x ({quality})");
-
-        // Ensure latent video frames are decoded to raw IMAGE before passing to RTX Video Super Resolution
         g.CurrentMedia = g.CurrentMedia.AsRawImage(g.CurrentVae);
         JArray decodedFrames = g.CurrentMedia.Path;
 
-        JObject rtxInputs = new JObject()
-        {
-            ["images"] = decodedFrames,
-            ["resize_type"] = "scale by multiplier",
-            ["resize_type.scale"] = scale,
-            ["quality"] = quality
-        };
-        string rtxNode = g.CreateNode("RTXVideoSuperResolution", rtxInputs);
-        JArray upscaledOutput = new JArray() { rtxNode, 0 };
+        string rtxNode = g.CreateNode("RTXVideoFrameGeneration", BuildRTXFrameGenerationInputs(g, decodedFrames, multiplier));
+        JArray interpolatedOutput = new() { rtxNode, 0 };
 
-        // Update CurrentMedia so True Final Save (step 100) saves the upscaled video frames
+        g.CurrentMedia = g.CurrentMedia.WithPath(interpolatedOutput);
+
+        if (g.UserInput.Get(RTXFrameGenAdjustFps, true))
+        {
+            int currentFps = g.CurrentMedia.GetRawFPS() ?? g.Text2VideoFPS();
+            int newFps = currentFps * multiplier;
+            g.CurrentMedia.FPS = newFps;
+            g.T2VFPSOverride = newFps;
+            Logs.Info($"RTX Frame Generation: Scaled video FPS from {currentFps} to {newFps}");
+        }
+    }
+
+    /// <summary>Generates RTX Video Super Resolution nodes for video generation upscaling (Priority 90).</summary>
+    public static void GenerateRTXVideoGenerationWorkflow(WorkflowGenerator g)
+    {
+        if (g.UserInput.TryGet(RTXVideoFile, out string vFile) && !string.IsNullOrEmpty(vFile))
+        {
+            return;
+        }
+        if (g.UserInput.TryGet(RTXInterpolateVideoFile, out string iFile) && !string.IsNullOrEmpty(iFile))
+        {
+            return;
+        }
+        if (!IsVideoGenerationRequest(g))
+        {
+            return;
+        }
+
+        if (!g.UserInput.TryGet(RTXUpscaleQuality, out _) && !g.UserInput.TryGet(RTXUpscaleScale, out _) && !g.UserInput.TryGet(RTXUpscaleResizeMode, out _))
+        {
+            return;
+        }
+        if (!g.Features.Contains("rtx_video_upscale"))
+        {
+            throw new SwarmUserErrorException("RTX Video Upscale is enabled, but NVIDIA RTX Nodes (ComfyUI_NVIDIA_RTX_Nodes) are not installed or available on this backend.");
+        }
+        if (g.CurrentMedia is null)
+        {
+            return;
+        }
+
+        Logs.Info("RTX Video Upscale: Upscaling video generation frames with RTX Video Super Resolution");
+
+        g.CurrentMedia = g.CurrentMedia.AsRawImage(g.CurrentVae);
+        JArray decodedFrames = g.CurrentMedia.Path;
+
+        string rtxNode = g.CreateNode("RTXVideoSuperResolution", BuildRTXSuperResolutionInputs(g, decodedFrames));
+        JArray upscaledOutput = new() { rtxNode, 0 };
+
         g.CurrentMedia = g.CurrentMedia.WithPath(upscaledOutput);
 
-        // Also update any pre-existing save or boomerang nodes if present
         string originalNodeId = decodedFrames[0].ToString();
         int originalOutputIndex = decodedFrames[1].Value<int>();
 
