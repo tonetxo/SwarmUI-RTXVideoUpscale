@@ -106,7 +106,9 @@ public class RTXVideoUpscaleExtension : Extension
     {
         RTXGroup = new(
             Name: "RTX Video Upscale",
-            Description: "",
+            Description: "Upscale video/images and interpolate frames using NVIDIA RTX Video Super Resolution (VSR) and RTX Video Frame Generation.\n" +
+                         "Hardware-accelerated by NVIDIA TensorRT and RTX Video Effects SDK.\n" +
+                         "Can be enabled for generation or used via history buttons ('RTX Upscale', 'RTX Interpolate').",
             Toggles: true,
             Open: false,
             OrderPriority: 8,
@@ -119,7 +121,10 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleQuality = T2IParamTypes.Register<string>(new T2IParamType(
             Name: "RTX Upscale Quality",
-            Description: "",
+            Description: "Quality mode for NVIDIA RTX Video Super Resolution.\n" +
+                         "'HIGHBITRATE_ULTRA' (recommended) preserves fine details on clean AI outputs.\n" +
+                         "Standard modes: ULTRA, HIGH, MEDIUM, LOW, BICUBIC.\n" +
+                         "Denoise and Deblur modes clean artifacts while preserving input resolution.",
             Default: "HIGHBITRATE_ULTRA",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -130,7 +135,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleResizeMode = T2IParamTypes.Register<string>(new T2IParamType(
             Name: "RTX Upscale Resize Mode",
-            Description: "",
+            Description: "Choose whether to scale by a multiplier (e.g. 2x) or target specific pixel dimensions (width x height).",
             Default: "Scale by Multiplier",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -141,7 +146,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleScale = T2IParamTypes.Register<double>(new T2IParamType(
             Name: "RTX Upscale Scale",
-            Description: "",
+            Description: "Scale multiplier for RTX Super Resolution (e.g. 2.0 doubles width and height; 1.5x scales 720p to 1080p).",
             Default: "2.0",
             Min: 1.0,
             Max: 4.0,
@@ -154,7 +159,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleTargetWidth = T2IParamTypes.Register<int>(new T2IParamType(
             Name: "RTX Upscale Target Width",
-            Description: "",
+            Description: "Target width in pixels when using 'Target Dimensions' mode (rounded to multiple of 8).",
             Default: "1920",
             Min: 64,
             Max: 8192,
@@ -168,7 +173,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleTargetHeight = T2IParamTypes.Register<int>(new T2IParamType(
             Name: "RTX Upscale Target Height",
-            Description: "",
+            Description: "Target height in pixels when using 'Target Dimensions' mode (rounded to multiple of 8).",
             Default: "1080",
             Min: 64,
             Max: 8192,
@@ -182,7 +187,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleStrength = T2IParamTypes.Register<double>(new T2IParamType(
             Name: "RTX Upscale Strength",
-            Description: "",
+            Description: "Effect blend strength from 0.0 (unprocessed) to 1.0 (full RTX enhancement).",
             Default: "1.0",
             Min: 0.0,
             Max: 1.0,
@@ -197,7 +202,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXUpscaleEncoding = T2IParamTypes.Register<string>(new T2IParamType(
             Name: "RTX Upscale Encoding",
-            Description: "",
+            Description: "SDK pixel encoding format. '8-bit RGB' is standard; '10-bit RGB (RGB10A2)' offers higher color precision.",
             Default: "8-bit RGB",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -211,7 +216,8 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXFrameInterpolation = T2IParamTypes.Register<int>(new T2IParamType(
             Name: "RTX Frame Generation Multiplier",
-            Description: "",
+            Description: "Frame count multiplier for NVIDIA RTX Video Frame Generation.\n" +
+                         "1 = disabled, 2 doubles frame rate (e.g. 16 -> 32 fps), 3 triples it, etc.",
             Default: "1",
             Min: 1,
             Max: 16,
@@ -225,7 +231,8 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXFrameGenAdjustFps = T2IParamTypes.Register<bool>(new T2IParamType(
             Name: "RTX Frame Gen Adjust FPS",
-            Description: "",
+            Description: "When enabled, multiplies video FPS with the frame multiplier to preserve original duration and achieve maximum smoothness.\n" +
+                         "When disabled, plays at original FPS in slow-motion.",
             Default: "true",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -235,7 +242,8 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXFrameGenMode = T2IParamTypes.Register<string>(new T2IParamType(
             Name: "RTX Frame Gen Mode",
-            Description: "",
+            Description: "Quality and performance mode for RTX Frame Generation.\n" +
+                         "'MEDIUM' (recommended) offers balanced motion clarity and high tensor throughput; 'HIGH' maximizes detail.",
             Default: "MEDIUM",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -246,7 +254,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXFrameGenShotDetection = T2IParamTypes.Register<bool>(new T2IParamType(
             Name: "RTX Frame Gen Shot Detection",
-            Description: "",
+            Description: "Automatically detects hard scene cuts to prevent unwanted frame morphing across shot transitions.",
             Default: "true",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -257,7 +265,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXFrameGenEncoding = T2IParamTypes.Register<string>(new T2IParamType(
             Name: "RTX Frame Gen Encoding",
-            Description: "",
+            Description: "Pixel encoding for frame generation. '8-bit RGB' is standard; '10-bit RGB (RGB10A2)' provides higher color fidelity.",
             Default: "8-bit RGB",
             Group: RTXGroup,
             OrderPriority: priority++,
@@ -271,7 +279,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXVideoFile = T2IParamTypes.Register<string>(new(
             "RTX Video File",
-            "",
+            "Internal parameter for video upscaling from history.",
             "",
             FeatureFlag: "rtx_video_upscale",
             ChangeWeight: 2,
@@ -280,7 +288,7 @@ public class RTXVideoUpscaleExtension : Extension
 
         RTXInterpolateVideoFile = T2IParamTypes.Register<string>(new(
             "RTX Interpolate Video File",
-            "",
+            "Internal parameter for video frame generation from history.",
             "",
             FeatureFlag: "rtx_video_frame_gen",
             ChangeWeight: 2,
