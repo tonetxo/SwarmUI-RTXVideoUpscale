@@ -281,18 +281,26 @@ public class RTXVideoUpscaleExtension : Extension
             "RTX Video File",
             "Internal parameter for video upscaling from history.",
             "",
+            IgnoreIf: "",
             FeatureFlag: "rtx_video_upscale",
             ChangeWeight: 2,
-            VisibleNormally: false
+            VisibleNormally: false,
+            DoNotSave: true,
+            Nonreusable: true,
+            HideFromMetadata: true
         ));
 
         RTXInterpolateVideoFile = T2IParamTypes.Register<string>(new(
             "RTX Interpolate Video File",
             "Internal parameter for video frame generation from history.",
             "",
+            IgnoreIf: "",
             FeatureFlag: "rtx_video_frame_gen",
             ChangeWeight: 2,
-            VisibleNormally: false
+            VisibleNormally: false,
+            DoNotSave: true,
+            Nonreusable: true,
+            HideFromMetadata: true
         ));
     }
 
@@ -418,6 +426,12 @@ public class RTXVideoUpscaleExtension : Extension
         {
             return;
         }
+
+        // Clean the inputs from g.UserInput so they do not leak into downstream processing or metadata.
+        // Note: an active Init Image must NOT abort this path - the history buttons are sent with the full current UI state,
+        // so aborting here would fall through into a full regeneration. Stale values are prevented by DoNotSave/Nonreusable.
+        g.UserInput.Remove(RTXVideoFile);
+        g.UserInput.Remove(RTXInterpolateVideoFile);
 
         if (!g.Features.Contains("comfy_loadimage_b64") || WorkflowGenerator.RestrictCustomNodes)
         {

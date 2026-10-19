@@ -1,5 +1,19 @@
 // Register RTX Video action buttons in SwarmUI history context menus
 (function() {
+    // Purge any stale cookies or hidden DOM values that could hijack normal generations
+    try {
+        if (typeof deleteCookie === 'function') {
+            deleteCookie('lastparam_input_rtxvideofile');
+            deleteCookie('lastparam_input_rtxinterpolatevideofile');
+        }
+        let el1 = document.getElementById('input_rtxvideofile');
+        if (el1) el1.value = '';
+        let el2 = document.getElementById('input_rtxinterpolatevideofile');
+        if (el2) el2.value = '';
+    } catch (e) {
+        console.error('Error cleaning RTX history param state:', e);
+    }
+
     if (typeof registerMediaButton !== 'function') {
         console.warn('RTX Video: registerMediaButton is not available - SwarmUI version may be too old');
         return;
